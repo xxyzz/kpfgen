@@ -162,7 +162,7 @@ categorised_metadata: [
 }}""",
         catalog=catalog,
     )
-
+    value = IonPyDict.from_value(IonType.STRUCT, value, ("book_metadata",))
     conn.execute(
         "INSERT INTO fragments VALUES('book_metadata', 'blob', ?)",
         (
@@ -177,6 +177,48 @@ categorised_metadata: [
         VALUES('book_metadata', 'element_type', 'book_metadata')
         """
     )
+    insert_content_features(conn, symbol_table, catalog)
+
+
+def insert_content_features(
+    conn: sqlite3.Connection,
+    symbol_table: SymbolTable,
+    catalog: SymbolTableCatalog,
+):
+    value = simpleion.loads(
+        """{
+  kfx_id: content_features,
+  features: [
+    {
+      namespace: "com.amazon.yjconversion",
+      key: "reflow-style",
+      version_info: {
+        version: {
+          major_version: 1,
+          minor_version: 0
+        }
+      }
+    }
+  ]
+}""",
+        catalog=catalog,
+    )
+    value = IonPyDict.from_value(IonType.STRUCT, value, ("content_features",))
+    conn.execute(
+        "INSERT INTO fragments VALUES('content_features', 'blob', ?)",
+        (
+            remove_ion_table(
+                simpleion.dumps(value, binary=True, imports=(symbol_table,))
+            ),
+        ),
+    )
+    conn.execute(
+        """
+        INSERT INTO fragment_properties
+        VALUES('content_features', 'element_type', 'content_features')
+        """
+    )
+
 
 
 def create_kdf(temp_dir: Path, db_path: Path):
