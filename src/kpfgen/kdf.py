@@ -220,6 +220,18 @@ def insert_content_features(
     )
 
 
+def int_to_base32(num: int) -> str:
+    if num == 0:
+        return "0"
+    # no "I", "L", "O", "Q"
+    symbols = "0123456789ABCDEFGHJKMNPRSTUVWXYZ"
+    digits = []
+    while num > 0:
+        digits.append(symbols[num % 32])
+        num //= 32
+    digits.reverse()
+    return "".join(digits)
+
 
 def create_kdf(temp_dir: Path, db_path: Path):
     from .epub import get_epub_metadata
