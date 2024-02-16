@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kpfgen"
+version = "0.1.0"
+authors = [
+    {name = "xxyzz"}
+]
+description = "Convert EPUB to KPF"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "GNU General Public License v3 or later (GPLv3+)"}
+dependencies = [
+    "amazon.ion~=0.11",
+    "lxml~=5.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "mypy",
+    "ruff",
+]
+
+[project.scripts]
+kpfgen = "kpfgen.main:main"
+
+[tool.ruff.lint]
+select = [
+    "E",  # pycodestyle error
+    "F",  # Pyflakes
+    "I",  # isort
+    "W",  # pycodestyle warning
+]
+
+[[tool.mypy.overrides]]
+module = "amazon.ion.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "lxml.*"
+ignore_missing_imports = true
