@@ -15,12 +15,14 @@ license = {text = "GNU General Public License v3 or later (GPLv3+)"}
 dependencies = [
     "amazon.ion~=0.11",
     "lxml~=5.1",
+    "pillow~=10.2.0",
 ]
 
 [project.optional-dependencies]
 dev = [
     "mypy",
     "ruff",
+    "types-Pillow",
 ]
 
 [project.scripts]

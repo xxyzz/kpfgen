@@ -1,10 +1,10 @@
-import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import unquote
 
 
 def extract_epub(epub_path: Path, dest_path: Path):
+    import zipfile
+
     with zipfile.ZipFile(epub_path) as zf:
         zf.extractall(dest_path)
 
@@ -29,6 +29,8 @@ NAMESPACES = {
 
 
 def get_epub_metadata(epub_dir: Path) -> EPUBMetadata:
+    from urllib.parse import unquote
+
     from lxml import etree
 
     container_root = etree.parse(epub_dir / "META-INF" / "container.xml")

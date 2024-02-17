@@ -824,3 +824,19 @@ YJ_SYMBOLS = (
     "standalone_entities",
     "document_regions",
 )
+
+YJ_CONVERSION_SYMBOLS = (
+    "yj.conversion.offset_map",
+    "yj.conversion.line_no",
+    "yj.conversion.amzn_src_id",
+    "yj.conversion.offset",
+    "yj.conversion.source_style_width",
+    "yj.conversion.modified_content_info",
+    "yj.conversion.added_content",
+    "yj.conversion.type",
+    "yj.conversion.length",
+    "yj.conversion.content",
+    "yj.conversion.html_name",
+    "yj.conversion.source_resource_filename",
+    "yj.conversion.source_style_height",
+)

@@ -20,7 +20,7 @@ def create_kpf(epub_path: Path):
     import tempfile
 
     from .epub import extract_epub
-    from .kdf import create_kdf
+    from .kdf import KDF
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp_path = Path(tmpdir)
@@ -31,7 +31,8 @@ def create_kpf(epub_path: Path):
         shutil.copyfile(epub_path, kpf_dir / "book.epub")
         extract_epub(epub_path, tmp_path)
         create_kcb(kpf_dir)
-        create_kdf(tmp_path, resources_dir / "book.kdf")
+        kdf = KDF()
+        kdf.create_kdf(tmp_path, resources_dir / "book.kdf")
         shutil.make_archive(str(epub_path.with_suffix("")), "zip", kpf_dir)
         kpf_path = epub_path.with_suffix(".zip")
         kpf_path.rename(kpf_path.with_suffix(".kpf"))
