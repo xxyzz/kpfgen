@@ -1,10 +1,15 @@
 from pathlib import Path
 
+from selenium.webdriver.common.by import By
+from selenium.webdriver.remote.webdriver import WebDriver
+from selenium.webdriver.remote.webelement import WebElement
+
 
 class KDF:
     def __init__(self):
         self.create_symbol_catalog()
         self.fragment_id = 0
+        self.webdriver = init_webdriver()
 
     def create_symbol_catalog(self):
         from amazon.ion.symbols import SymbolTableCatalog, shared_symbol_table
@@ -28,7 +33,8 @@ class KDF:
         self.epub_metadata = get_epub_metadata(tmp_dir)
         self.insert_metadata()
         self.insert_cover_section()
-
+        self.process_spine_items()
+        self.webdriver.quit()
         self.conn.commit()
         self.conn.close()
 
@@ -286,7 +292,6 @@ categorised_metadata: [
         res_text = f"""{{
   format: {im_format},
   location: "{res_loc_id}",
-  'yj.conversion.source_resource_filename': "{image_path.name}",
   resource_width: {im_width},
   resource_name: kfx_id::"{res_id}",
   resource_height: {im_height}
@@ -341,6 +346,108 @@ categorised_metadata: [
             ]
         )
 
+    def process_spine_items(self):
+        for xml_path in self.epub_metadata.spine_paths:
+            self.create_section(xml_path)
+
+    def create_section(self, xml_path: Path):
+        section_id = self.create_fragment_id("c")
+        section_struct_id = self.create_fragment_id("i")
+        story_id = self.create_fragment_id("l")
+        section_ion = f"""{{
+  section_name: kfx_id::"{section_id}",
+  page_templates: [
+    structure::{{
+      kfx_id: kfx_id::"{section_struct_id}",
+      story_name: kfx_id::"{story_id}",
+      type: text
+    }}
+  ]
+}}"""
+        self.insert_blob_fragment(section_id, section_ion, "section")
+        self.insert_section_auxiliary_data(section_id)
+        self.create_storyline(xml_path, story_id)
+        self.insert_fragment_property(section_id, "child", story_id)
+
+    def create_storyline(self, xml_path: Path, story_id: str) -> None:
+        self.webdriver.get("file://" + str(xml_path))
+        body = self.webdriver.find_element(By.TAG_NAME, "body")
+        content_ids = []
+        for child in body.find_elements(By.XPATH, "*"):
+            content_id = self.process_tag(child, story_id)
+            if content_id is not None:
+                content_ids.append(content_id)
+
+        content_str = ", ".join(f'kfx_id::"{content_id}"' for content_id in content_ids)
+        storyline_ion = f"""{{
+  story_name: kfx_id::"{story_id}",
+  content_list: [{content_str}]
+}}"""
+        self.insert_blob_fragment(story_id, storyline_ion, "storyline")
+        self.insert_fragment_properties(
+            [(story_id, "element_type", "storyline"), (story_id, "child", story_id)]
+        )
+
+    def process_tag(self, tag: WebElement, parent_id: str) -> str | None:
+        if not tag.is_displayed():
+            return None
+        if tag.tag_name == "figure":
+            return None
+        elif self.is_block_tag(tag):
+            if not self.contain_block_tag(tag):
+                return self.create_text_structure(tag, parent_id)
+            else:
+                return self.create_container_structure(tag, parent_id)
+        return None
+
+    def contain_block_tag(self, tag: WebElement) -> bool:
+        for child in tag.find_elements(By.XPATH, "*"):
+            if self.contain_block_tag(child):
+                return True
+        return self.is_block_tag(tag)
+
+    def is_block_tag(self, tag: WebElement) -> bool:
+        return tag.value_of_css_property("display") == "block"
+
+    def create_container_structure(self, tag: WebElement, parent_id: str) -> str:
+        structure_id = self.create_fragment_id("i")
+        content_ids = []
+        for child in tag.find_elements(By.XPATH, "*"):
+            content_id = self.process_tag(child, structure_id)
+            if content_id is not None:
+                content_ids.append(content_id)
+
+        content_str = ", ".join(f'kfx_id::"{content_id}"' for content_id in content_ids)
+        structure_ion = f"""{{
+  kfx_id: kfx_id::"{structure_id}",
+  type: container,
+  content_list: [{content_str}],
+}}"""
+        self.insert_blob_fragment(structure_id, structure_ion, "structure")
+        self.insert_fragment_properties(
+            [
+                (parent_id, "child", structure_id),
+                (structure_id, "element_type", "structure"),
+            ]
+        )
+        return structure_id
+
+    def create_text_structure(self, tag: WebElement, parent_id: str) -> str:
+        structure_id = self.create_fragment_id("i")
+        structure_ion = f"""{{
+  kfx_id: kfx_id::"{structure_id}",
+  type: text,
+  content: "{tag.text}"
+}}"""
+        self.insert_blob_fragment(structure_id, structure_ion, "structure")
+        self.insert_fragment_properties(
+            [
+                (parent_id, "child", structure_id),
+                (structure_id, "element_type", "structure"),
+            ]
+        )
+        return structure_id
+
 
 def remove_ion_table(binary: bytes) -> bytes:
     """
@@ -361,3 +468,15 @@ def int_to_base32(num: int) -> str:
         num //= 32
     digits.reverse()
     return "".join(digits)
+
+
+def init_webdriver() -> WebDriver:
+    from selenium import webdriver
+    from selenium.webdriver.firefox.firefox_profile import FirefoxProfile
+
+    options = webdriver.FirefoxOptions()
+    firefox_profile = FirefoxProfile()
+    firefox_profile.set_preference("javascript.enabled", False)
+    options.profile = firefox_profile
+    options.add_argument("-headless")
+    return webdriver.Firefox(options=options)

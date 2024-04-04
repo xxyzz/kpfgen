@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
@@ -17,6 +17,7 @@ class EPUBMetadata:
     author: str = ""
     publisher: str = ""
     cover_path: Path | None = None
+    spine_paths: list[Path] = field(default_factory=list)
 
 
 NAMESPACES = {
@@ -56,5 +57,16 @@ def get_epub_metadata(epub_dir: Path) -> EPUBMetadata:
         metadata.cover_path = opf_path.parent / opf_root.find(
             f'opf:manifest/opf:item[@id="{cover_id}"]', NAMESPACES
         ).get("href")
+    get_epub_spine(opf_root, metadata, opf_path)
 
     return metadata
+
+
+def get_epub_spine(opf_root, metadata: EPUBMetadata, opf_path: Path):
+    for spine_item in opf_root.iterfind("opf:spine/opf:itemref", NAMESPACES):
+        manifest_item_id = spine_item.get("idref", "")
+        manifest_item = opf_root.find(
+            f'opf:manifest/opf:item[@id="{manifest_item_id}"]', NAMESPACES
+        )
+        if manifest_item is not None:
+            metadata.spine_paths.append(opf_path.parent / manifest_item.get("href"))

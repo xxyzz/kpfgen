@@ -2,6 +2,10 @@
 
 Convert EPUB to KPF.
 
+## Dependencies
+
+- [geckodriver](https://github.com/mozilla/geckodriver)
+
 ## Install from source
 
 ```
