@@ -1,5 +1,7 @@
 from pathlib import Path
 
+from amazon.ion.core import IonType
+from amazon.ion.simple_types import IonPyDict, IonPyText
 from selenium.webdriver.common.by import By
 from selenium.webdriver.remote.webdriver import WebDriver
 from selenium.webdriver.remote.webelement import WebElement
@@ -31,9 +33,10 @@ class KDF:
         self.create_kdf_tables(db_path)
         self.insert_ion_symbol_table()
         self.epub_metadata = get_epub_metadata(tmp_dir)
-        self.insert_metadata()
+        self.insert_book_metadata()
         self.insert_cover_section()
         self.process_spine_items()
+        self.create_document_data()
         self.webdriver.quit()
         self.conn.commit()
         self.conn.close()
@@ -89,13 +92,17 @@ class KDF:
             ]
         )
 
-    def insert_blob_fragment(self, fragment_id: str, ion_text: str, annotation: str):
+    def insert_blob_fragment(
+        self, fragment_id: str, ion: str | IonPyDict, annotation: str = ""
+    ):
         from amazon.ion import simpleion
         from amazon.ion.core import IonType
-        from amazon.ion.simple_types import IonPyDict
 
-        value = simpleion.loads(ion_text, catalog=self.catalog)
-        value = IonPyDict.from_value(IonType.STRUCT, value, (annotation,))
+        if isinstance(ion, str):
+            value = simpleion.loads(ion, catalog=self.catalog)
+            value = IonPyDict.from_value(IonType.STRUCT, value, (annotation,))
+        else:
+            value = ion
         self.insert_fragment(
             fragment_id,
             "blob",
@@ -104,7 +111,7 @@ class KDF:
             ),
         )
 
-    def insert_metadata(self):
+    def insert_book_metadata(self):
         import random
         import string
         from importlib.metadata import version
@@ -261,7 +268,7 @@ categorised_metadata: [
     ],
     [
       2,
-      kfx_id::"{story_id}"
+      kfx_id::"{struct_id}"
     ]
   ]
 }}"""
@@ -353,28 +360,49 @@ categorised_metadata: [
     def create_section(self, xml_path: Path):
         section_id = self.create_fragment_id("c")
         section_struct_id = self.create_fragment_id("i")
-        story_id = self.create_fragment_id("l")
+        storyline_id = self.create_fragment_id("l")
         section_ion = f"""{{
   section_name: kfx_id::"{section_id}",
   page_templates: [
     structure::{{
       kfx_id: kfx_id::"{section_struct_id}",
-      story_name: kfx_id::"{story_id}",
+      story_name: kfx_id::"{storyline_id}",
       type: text
     }}
   ]
 }}"""
         self.insert_blob_fragment(section_id, section_ion, "section")
         self.insert_section_auxiliary_data(section_id)
-        self.create_storyline(xml_path, story_id)
-        self.insert_fragment_property(section_id, "child", story_id)
+        spm_list = self.create_storyline(xml_path, storyline_id)
+        self.insert_fragment_property(section_id, "child", storyline_id)
+        self.create_section_spm(section_id, section_struct_id, spm_list)
 
-    def create_storyline(self, xml_path: Path, story_id: str) -> None:
+    def create_section_spm(
+        self, section_id: str, section_struct_id: str, spm_list: list[tuple[str, int]]
+    ) -> None:
+        spm_id = f"{section_id}-spm"
+        new_spm_list = []
+        location = 1
+        for structure_id, content_len in spm_list:
+            new_spm_list.append((structure_id, location))
+            location += content_len
+        spm_contains = ", ".join(
+            f'[{loc}, kfx_id::"{s_id}"]' for (s_id, loc) in new_spm_list
+        )
+        spm_ion = f"""{{
+  section_name: kfx_id::"{section_id}",
+  contains: [[1, kfx_id::"{section_struct_id}"],{spm_contains}]
+}}"""
+        self.insert_blob_fragment(spm_id, spm_ion, "section_position_id_map")
+        self.insert_fragment_property(spm_id, "element_type", "section_position_id_map")
+
+    def create_storyline(self, xml_path: Path, story_id: str) -> list[tuple[str, int]]:
         self.webdriver.get("file://" + str(xml_path))
         body = self.webdriver.find_element(By.TAG_NAME, "body")
         content_ids = []
+        spm_list: list[tuple[str, int]] = []
         for child in body.find_elements(By.XPATH, "*"):
-            content_id = self.process_tag(child, story_id)
+            content_id = self.process_tag(child, story_id, spm_list)
             if content_id is not None:
                 content_ids.append(content_id)
 
@@ -387,33 +415,31 @@ categorised_metadata: [
         self.insert_fragment_properties(
             [(story_id, "element_type", "storyline"), (story_id, "child", story_id)]
         )
+        return spm_list
 
-    def process_tag(self, tag: WebElement, parent_id: str) -> str | None:
-        if not tag.is_displayed():
+    def process_tag(
+        self, tag: WebElement, parent_id: str, spm_list: list[tuple[str, int]]
+    ) -> str | None:
+        if not is_tag_displayed(tag):
             return None
-        if tag.tag_name == "figure":
+        if tag.tag_name in ["figure", "img"]:
             return None
-        elif self.is_block_tag(tag):
-            if not self.contain_block_tag(tag):
-                return self.create_text_structure(tag, parent_id)
+        elif is_block_tag(tag):
+            if not contain_block_tag(tag):
+                if len(tag.text) > 0:
+                    return self.create_text_structure(tag, parent_id, spm_list)
             else:
-                return self.create_container_structure(tag, parent_id)
+                return self.create_container_structure(tag, parent_id, spm_list)
         return None
 
-    def contain_block_tag(self, tag: WebElement) -> bool:
-        for child in tag.find_elements(By.XPATH, "*"):
-            if self.contain_block_tag(child):
-                return True
-        return self.is_block_tag(tag)
-
-    def is_block_tag(self, tag: WebElement) -> bool:
-        return tag.value_of_css_property("display") == "block"
-
-    def create_container_structure(self, tag: WebElement, parent_id: str) -> str:
+    def create_container_structure(
+        self, tag: WebElement, parent_id: str, spm_list: list[tuple[str, int]]
+    ) -> str:
         structure_id = self.create_fragment_id("i")
+        spm_list.append((structure_id, 1))
         content_ids = []
         for child in tag.find_elements(By.XPATH, "*"):
-            content_id = self.process_tag(child, structure_id)
+            content_id = self.process_tag(child, structure_id, spm_list)
             if content_id is not None:
                 content_ids.append(content_id)
 
@@ -432,21 +458,69 @@ categorised_metadata: [
         )
         return structure_id
 
-    def create_text_structure(self, tag: WebElement, parent_id: str) -> str:
+    def create_text_structure(
+        self, tag: WebElement, parent_id: str, spm_list: list[tuple[str, int]]
+    ) -> str:
         structure_id = self.create_fragment_id("i")
-        structure_ion = f"""{{
-  kfx_id: kfx_id::"{structure_id}",
-  type: text,
-  content: "{tag.text}"
-}}"""
-        self.insert_blob_fragment(structure_id, structure_ion, "structure")
+        ion = IonPyDict.from_value(
+            IonType.STRUCT,
+            {
+                "kfx_id": IonPyText.from_value(
+                    IonType.STRING, structure_id, ("kfx_id",)
+                ),
+                "type": "text",
+                "content": tag.text,
+            },
+            ("structure",),
+        )
+        self.insert_blob_fragment(structure_id, ion)
         self.insert_fragment_properties(
             [
                 (parent_id, "child", structure_id),
                 (structure_id, "element_type", "structure"),
             ]
         )
+        spm_list.append((structure_id, len(tag.text)))
         return structure_id
+
+    def create_document_data(self) -> None:
+        section_ids = [
+            section_id
+            for (section_id,) in self.conn.execute(
+                """
+                SELECT id FROM fragment_properties
+                WHERE key = 'element_type' AND value = 'section'
+                """
+            )
+        ]
+        section_ion_str = ",".join(
+            f'kfx_id::"{section_id}"' for section_id in section_ids
+        )
+        document_data_ion = f"""{{
+  direction: ltr,
+  writing_mode: horizontal_tb,
+  column_count: auto,
+  selection: enabled,
+  spacing_percent_base: width,
+  reading_orders: [
+    {{
+      reading_order_name: default,
+      sections: [{section_ion_str}]
+    }}
+  ]
+}}"""
+        self.insert_blob_fragment("document_data", document_data_ion, "document_data")
+        self.insert_fragment_property("document_data", "element_type", "document_data")
+        metadata_ion = f"""{{
+  reading_orders: [
+    {{
+      reading_order_name: default,
+      sections: [{section_ion_str}]
+    }}
+  ]
+}}"""
+        self.insert_blob_fragment("metadata", metadata_ion, "metadata")
+        self.insert_fragment_property("metadata", "element_type", "metadata")
 
 
 def remove_ion_table(binary: bytes) -> bytes:
@@ -480,3 +554,20 @@ def init_webdriver() -> WebDriver:
     options.profile = firefox_profile
     options.add_argument("-headless")
     return webdriver.Firefox(options=options)
+
+
+def contain_block_tag(tag: WebElement) -> bool:
+    for child in tag.find_elements(By.XPATH, "*"):
+        if is_block_tag(child):
+            return True
+        elif contain_block_tag(child):
+            return True
+    return False
+
+
+def is_block_tag(tag: WebElement) -> bool:
+    return tag.value_of_css_property("display") == "block"
+
+
+def is_tag_displayed(tag: WebElement) -> bool:
+    return tag.is_displayed() and tag.value_of_css_property("font-size") != "0px"
