@@ -33,8 +33,8 @@ class KDF:
         self.create_kdf_tables(db_path)
         self.insert_ion_symbol_table()
         self.epub_metadata = get_epub_metadata(tmp_dir)
-        self.insert_book_metadata()
-        self.insert_cover_section()
+        cover_res_id = self.insert_cover_section()
+        self.insert_book_metadata(cover_res_id)
         self.process_spine_items()
         self.create_document_data()
         self.webdriver.quit()
@@ -111,62 +111,50 @@ class KDF:
             ),
         )
 
-    def insert_book_metadata(self):
+    def insert_book_metadata(self, cover_res_id: str):
         import random
         import string
         from importlib.metadata import version
 
-        metadata_str = ""
-        for metadata in ("language", "title", "description", "author", "publisher"):
-            value = getattr(self.epub_metadata, metadata)
+        metadata = [
+            {
+                "key": "book_id",
+                "value": "".join(
+                    random.choices(string.digits + string.ascii_letters, k=23)
+                ),
+            }
+        ]
+        if len(cover_res_id) > 0:
+            metadata.append({"key": "cover_img", "value": cover_res_id})
+        for metadata_key in ("language", "title", "description", "author", "publisher"):
+            value = getattr(self.epub_metadata, metadata_key)
             if len(value) > 0:
-                metadata_str += f""",
-                {{
-                  key: "{metadata}",
-                  value: "{value}"
-                }}"""
+                metadata.append({"key": metadata_key, "value": value})
 
-        ion_text = f"""{{
-categorised_metadata: [
-  {{
-    category: "kindle_ebook_metadata",
-    metadata: [
-      {{
-        key: "selection",
-        value: "enabled"
-      }},
-      {{
-        key: "nested_span",
-        value: "enabled"
-      }}
-    ]
-  }},
-  {{
-    category: "kindle_audit_metadata",
-    metadata: [
-      {{
-        key: "file_creator",
-        value: "kpfgen"
-      }},
-      {{
-        key: "creator_version",
-        value: "{version('kpfgen')}"
-      }}
-    ]
-  }},
-  {{
-    category: "kindle_title_metadata",
-    metadata: [
-      {{
-        key: "book_id",
-        value: "{''.join(random.choices(string.digits + string.ascii_letters, k=23))}"
-      }}
-      {metadata_str}
-    ]
-  }}
-]
-}}"""
-        self.insert_blob_fragment("book_metadata", ion_text, "book_metadata")
+        ion = IonPyDict.from_value(
+            IonType.STRUCT,
+            {
+                "categorised_metadata": [
+                    {
+                        "category": "kindle_ebook_metadata",
+                        "metadata": [
+                            {"key": "selection", "value": "enabled"},
+                            {"key": "nested_span", "value": "enabled"},
+                        ],
+                    },
+                    {
+                        "category": "kindle_audit_metadata",
+                        "metadata": [
+                            {"key": "file_creator", "value": "kpfgen"},
+                            {"key": "creator_version", "value": version("kpfgen")},
+                        ],
+                    },
+                    {"category": "kindle_title_metadata", "metadata": metadata},
+                ]
+            },
+            ("book_metadata",),
+        )
+        self.insert_blob_fragment("book_metadata", ion)
         self.insert_content_features()
 
     def insert_content_features(self):
@@ -176,12 +164,7 @@ categorised_metadata: [
     {
       namespace: "com.amazon.yjconversion",
       key: "reflow-style",
-      version_info: {
-        version: {
-          major_version: 1,
-          minor_version: 0
-        }
-      }
+      version_info: {version: {major_version: 1, minor_version: 0}}
     }
   ]
 }"""
@@ -190,11 +173,11 @@ categorised_metadata: [
             "content_features", "element_type", "content_features"
         )
 
-    def insert_cover_section(self):
+    def insert_cover_section(self) -> str:
         from PIL import Image
 
         if self.epub_metadata.cover_path is None:
-            return
+            return ""
         with Image.open(self.epub_metadata.cover_path) as im:
             im_width, im_height = im.size
 
@@ -237,14 +220,8 @@ categorised_metadata: [
         res_id = self.insert_image_resource(self.epub_metadata.cover_path)
         style_id = self.create_fragment_id("s")
         style_text = f"""{{
-  font_size: {{
-    value: 1.0e0,
-    unit: rem
-  }},
-  line_height: {{
-    value: 1.0e0,
-    unit: lh
-  }},
+  font_size: {{value: 1.0e0, unit: rem}},
+  line_height: {{value: 1.0e0, unit: lh}},
   style_name: kfx_id::"{style_id}"
 }}"""
         self.insert_blob_fragment(style_id, style_text, "style")
@@ -261,21 +238,13 @@ categorised_metadata: [
 
         spm_text = f"""{{
   section_name: kfx_id::"{section_id}",
-  contains: [
-    [
-      1,
-      kfx_id::"{section_struct_id}"
-    ],
-    [
-      2,
-      kfx_id::"{struct_id}"
-    ]
-  ]
+  contains: [[1, kfx_id::"{section_struct_id}"], [2, kfx_id::"{struct_id}"]]
 }}"""
         spm_id = f"{section_id}-spm"
         self.insert_blob_fragment(spm_id, spm_text, "section_position_id_map")
         self.insert_fragment_property(spm_id, "element_type", "section_position_id_map")
         self.insert_section_auxiliary_data(section_id)
+        return res_id
 
     def create_fragment_id(self, prefix: str) -> str:
         fragment_id_str = prefix + int_to_base32(self.fragment_id)
@@ -310,11 +279,9 @@ categorised_metadata: [
                 (res_id, "element_type", "external_resource"),
             ]
         )
-
         shutil.copy(image_path, self.res_dir / res_loc_id)
-        self.insert_fragment(res_loc_id, "path", f"rsc/{res_loc_id}")
+        self.insert_fragment(res_loc_id, "path", f"res/{res_loc_id}")
         self.insert_fragment_property(res_loc_id, "element_type", "bcRawMedia")
-
         return res_id
 
     def insert_fragment(
@@ -338,12 +305,7 @@ categorised_metadata: [
         ad_id = section_id + "-ad"
         ion_text = f"""{{
   kfx_id: kfx_id::"{ad_id}",
-  metadata: [
-    {{
-      key: "IS_TARGET_SECTION",
-      value: true
-    }}
-  ]
+  metadata: [{{key: "IS_TARGET_SECTION", value: true}}]
 }}"""
         self.insert_blob_fragment(ad_id, ion_text, "auxiliary_data")
         self.insert_fragment_properties(
