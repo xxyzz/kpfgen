@@ -33,6 +33,7 @@ def create_kpf(epub_path: Path):
         create_kcb(kpf_dir)
         kdf = KDF()
         kdf.create_kdf(tmp_path, resources_dir / "book.kdf")
+        create_manifest_file(resources_dir)
         shutil.make_archive(str(epub_path.with_suffix("")), "zip", kpf_dir)
         kpf_path = epub_path.with_suffix(".zip")
         kpf_path.rename(kpf_path.with_suffix(".kpf"))
@@ -54,3 +55,13 @@ def create_kcb(kpf_dir: Path):
             }
         }
         json.dump(data, f, indent=2, ensure_ascii=False)
+
+
+def create_manifest_file(resources_dir: Path):
+    with (resources_dir / "ManifestFile").open("w") as f:
+        f.write("""AmazonYJManifest
+digital_content_manifest::{
+  version:1,
+  storage_type:"localSqlLiteDB",
+  digital_content_name:"book.kdf"
+}""")
