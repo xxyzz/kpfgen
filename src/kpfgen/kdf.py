@@ -37,8 +37,8 @@ class KDF:
         self.epub_metadata = get_epub_metadata(tmp_dir)
         cover_res_id = self.insert_cover_section()
         self.insert_book_metadata(cover_res_id)
-        self.process_spine_items()
-        self.create_document_data()
+        section_ids = self.process_spine_items()
+        self.create_document_data(section_ids)
         self.webdriver.quit()
         self.conn.commit()
         self.conn.close()
@@ -317,15 +317,18 @@ class KDF:
             ]
         )
 
-    def process_spine_items(self) -> None:
+    def process_spine_items(self) -> list[str]:
         first_structure_ids: dict[str, str] = {}
+        section_ids = ["c0"]
         for xml_path in self.epub_metadata.spine_paths:
-            structure_ids = self.create_section(xml_path)
+            section_id, structure_ids = self.create_section(xml_path)
+            section_ids.append(section_id)
             if len(structure_ids) > 0:
                 first_structure_ids[xml_path.name] = structure_ids[0][0]
         self.create_book_navigation(first_structure_ids)
+        return section_ids
 
-    def create_section(self, xml_path: Path) -> list[tuple[str, int]]:
+    def create_section(self, xml_path: Path) -> tuple[str, list[tuple[str, int]]]:
         section_id = self.create_fragment_id("c")
         section_struct_id = self.create_fragment_id("i")
         storyline_id = self.create_fragment_id("l")
@@ -342,9 +345,14 @@ class KDF:
         self.insert_blob_fragment(section_id, section_ion, "section")
         self.insert_section_auxiliary_data(section_id)
         spm_list = self.create_storyline(xml_path, storyline_id)
-        self.insert_fragment_property(section_id, "child", storyline_id)
+        self.insert_fragment_properties(
+            [
+                (section_id, "element_type", "section"),
+                (section_id, "child", storyline_id),
+            ]
+        )
         self.create_section_spm(section_id, section_struct_id, spm_list)
-        return spm_list
+        return section_id, spm_list
 
     def create_section_spm(
         self, section_id: str, section_struct_id: str, spm_list: list[tuple[str, int]]
@@ -451,16 +459,7 @@ class KDF:
         spm_list.append((structure_id, len(tag.text)))
         return structure_id
 
-    def create_document_data(self) -> None:
-        section_ids = [
-            section_id
-            for (section_id,) in self.conn.execute(
-                """
-                SELECT id FROM fragment_properties
-                WHERE key = 'element_type' AND value = 'section'
-                """
-            )
-        ]
+    def create_document_data(self, section_ids: list[str]) -> None:
         section_ion_str = ",".join(
             f'kfx_id::"{section_id}"' for section_id in section_ids
         )
