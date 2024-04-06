@@ -1,19 +1,21 @@
 from pathlib import Path
+from typing import Any
 
 from amazon.ion.core import IonType
-from amazon.ion.simple_types import IonPyDict, IonPyText
+from amazon.ion.simple_types import IonPyDict, IonPyList, IonPySymbol, IonPyText
+from lxml import etree
 from selenium.webdriver.common.by import By
 from selenium.webdriver.remote.webdriver import WebDriver
 from selenium.webdriver.remote.webelement import WebElement
 
 
 class KDF:
-    def __init__(self):
+    def __init__(self) -> None:
         self.create_symbol_catalog()
         self.fragment_id = 0
         self.webdriver = init_webdriver()
 
-    def create_symbol_catalog(self):
+    def create_symbol_catalog(self) -> None:
         from amazon.ion.symbols import SymbolTableCatalog, shared_symbol_table
 
         from .yj_symbols import YJ_CONVERSION_SYMBOLS, YJ_SYMBOLS
@@ -24,7 +26,7 @@ class KDF:
         self.catalog = SymbolTableCatalog()
         self.catalog.register(self.symbol_table)
 
-    def create_kdf(self, tmp_dir: Path, db_path: Path):
+    def create_kdf(self, tmp_dir: Path, db_path: Path) -> None:
         from .epub import get_epub_metadata
 
         self.res_dir = db_path.parent / "res"
@@ -41,7 +43,7 @@ class KDF:
         self.conn.commit()
         self.conn.close()
 
-    def create_kdf_tables(self, db_path: Path):
+    def create_kdf_tables(self, db_path: Path) -> None:
         import sqlite3
 
         self.conn = sqlite3.connect(db_path)
@@ -70,7 +72,7 @@ class KDF:
             """
         )
 
-    def insert_ion_symbol_table(self):
+    def insert_ion_symbol_table(self) -> None:
         from amazon.ion import simpleion
 
         from .yj_symbols import YJ_CONVERSION_SYMBOLS, YJ_SYMBOLS
@@ -94,7 +96,7 @@ class KDF:
 
     def insert_blob_fragment(
         self, fragment_id: str, ion: str | IonPyDict, annotation: str = ""
-    ):
+    ) -> None:
         from amazon.ion import simpleion
         from amazon.ion.core import IonType
 
@@ -111,7 +113,7 @@ class KDF:
             ),
         )
 
-    def insert_book_metadata(self, cover_res_id: str):
+    def insert_book_metadata(self, cover_res_id: str) -> None:
         import random
         import string
         from importlib.metadata import version
@@ -157,7 +159,7 @@ class KDF:
         self.insert_blob_fragment("book_metadata", ion)
         self.insert_content_features()
 
-    def insert_content_features(self):
+    def insert_content_features(self) -> None:
         ion_text = """{
   kfx_id: content_features,
   features: [
@@ -286,22 +288,22 @@ class KDF:
 
     def insert_fragment(
         self, fragment_id: str, payload_type: str, payload_value: str | bytes
-    ):
+    ) -> None:
         self.conn.execute(
             "INSERT INTO fragments VALUES(?, ?, ?)",
             (fragment_id, payload_type, payload_value),
         )
 
-    def insert_fragment_property(self, fragment_id: str, key: str, value: str):
+    def insert_fragment_property(self, fragment_id: str, key: str, value: str) -> None:
         self.conn.execute(
             "INSERT INTO fragment_properties VALUES(?, ?, ?)",
             (fragment_id, key, value),
         )
 
-    def insert_fragment_properties(self, data):
+    def insert_fragment_properties(self, data) -> None:
         self.conn.executemany("INSERT INTO fragment_properties VALUES(?, ?, ?)", data)
 
-    def insert_section_auxiliary_data(self, section_id: str):
+    def insert_section_auxiliary_data(self, section_id: str) -> None:
         ad_id = section_id + "-ad"
         ion_text = f"""{{
   kfx_id: kfx_id::"{ad_id}",
@@ -315,11 +317,15 @@ class KDF:
             ]
         )
 
-    def process_spine_items(self):
+    def process_spine_items(self) -> None:
+        first_structure_ids: dict[str, str] = {}
         for xml_path in self.epub_metadata.spine_paths:
-            self.create_section(xml_path)
+            structure_ids = self.create_section(xml_path)
+            if len(structure_ids) > 0:
+                first_structure_ids[xml_path.name] = structure_ids[0][0]
+        self.create_book_navigation(first_structure_ids)
 
-    def create_section(self, xml_path: Path):
+    def create_section(self, xml_path: Path) -> list[tuple[str, int]]:
         section_id = self.create_fragment_id("c")
         section_struct_id = self.create_fragment_id("i")
         storyline_id = self.create_fragment_id("l")
@@ -338,6 +344,7 @@ class KDF:
         spm_list = self.create_storyline(xml_path, storyline_id)
         self.insert_fragment_property(section_id, "child", storyline_id)
         self.create_section_spm(section_id, section_struct_id, spm_list)
+        return spm_list
 
     def create_section_spm(
         self, section_id: str, section_struct_id: str, spm_list: list[tuple[str, int]]
@@ -367,7 +374,6 @@ class KDF:
             content_id = self.process_tag(child, story_id, spm_list)
             if content_id is not None:
                 content_ids.append(content_id)
-
         content_str = ", ".join(f'kfx_id::"{content_id}"' for content_id in content_ids)
         storyline_ion = f"""{{
   story_name: kfx_id::"{story_id}",
@@ -430,7 +436,7 @@ class KDF:
                 "kfx_id": IonPyText.from_value(
                     IonType.STRING, structure_id, ("kfx_id",)
                 ),
-                "type": "text",
+                "type": IonPySymbol.from_value(IonType.SYMBOL, "text"),
                 "content": tag.text,
             },
             ("structure",),
@@ -483,6 +489,80 @@ class KDF:
 }}"""
         self.insert_blob_fragment("metadata", metadata_ion, "metadata")
         self.insert_fragment_property("metadata", "element_type", "metadata")
+
+    def create_book_navigation(self, structure_ids: dict[str, str]) -> None:
+        from .epub import NAMESPACES
+
+        if self.epub_metadata.toc is None:
+            return None
+        toc_root = etree.parse(self.epub_metadata.toc)
+        nav_containers = []
+        for ol_tag in toc_root.iterfind(".//xml:nav/xml:ol", NAMESPACES):
+            nav_entries = self.create_nav_entries(ol_tag, structure_ids)
+            nav_container_id = self.create_fragment_id("n")
+            nav_container_ion = IonPyDict.from_value(
+                IonType.STRUCT,
+                {
+                    "nav_type": IonPySymbol.from_value(IonType.SYMBOL, "toc"),
+                    "nav_container_name": IonPyText.from_value(
+                        IonType.STRING, nav_container_id, ("kfx_id",)
+                    ),
+                    "entries": nav_entries,
+                },
+                ("nav_container",),
+            )
+            nav_containers.append(nav_container_ion)
+
+        nav_ion = IonPyList.from_value(
+            IonType.LIST,
+            [
+                {
+                    "reading_order_name": IonPySymbol.from_value(
+                        IonType.SYMBOL, "default"
+                    ),
+                    "nav_containers": nav_containers,
+                }
+            ],
+            ("book_navigation",),
+        )
+        self.insert_blob_fragment("book_navigation", nav_ion)
+        self.insert_fragment_property(
+            "book_navigation", "element_type", "book_navigation"
+        )
+
+    def create_nav_entries(
+        self, ol_tag: etree._Element, structure_ids: dict[str, str]
+    ) -> list[IonPyDict]:
+        from .epub import NAMESPACES
+
+        entries: list[IonPyDict] = []
+        for li_tag in ol_tag.iterfind("xml:li", NAMESPACES):
+            a_tag = li_tag.find("xml:a", NAMESPACES)
+            if a_tag is None:
+                continue
+            nested_entries: list[IonPyDict] = []
+            nested_ol_tag = li_tag.find("xml:ol", NAMESPACES)
+            if nested_ol_tag is not None:
+                nested_entries = self.create_nav_entries(nested_ol_tag, structure_ids)
+            label = a_tag.xpath("string()")
+            href = Path(a_tag.get("href", "")).name
+            if href in structure_ids:
+                nav_unit_data: dict[str, Any] = {
+                    "representation": {"label": label},
+                    "target_position": {
+                        "id": IonPyText.from_value(
+                            IonType.STRING, structure_ids[href], ("kfx_id",)
+                        ),
+                        "offset": 0,
+                    },
+                }
+                if len(nested_entries) > 0:
+                    nav_unit_data["entries"] = nested_entries
+                nav_unit_ion = IonPyDict.from_value(
+                    IonType.STRUCT, nav_unit_data, ("nav_unit",)
+                )
+                entries.append(nav_unit_ion)
+        return entries
 
 
 def remove_ion_table(binary: bytes) -> bytes:

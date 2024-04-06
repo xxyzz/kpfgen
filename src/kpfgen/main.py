@@ -1,9 +1,10 @@
 from pathlib import Path
 
 
-def main():
+def main() -> None:
     import argparse
     import logging
+    from sys import exit
 
     parser = argparse.ArgumentParser()
     parser.add_argument("epub_path", type=Path)
@@ -11,11 +12,11 @@ def main():
     epub_path = args.epub_path.expanduser()
     if not epub_path.exists():
         logging.error("EPUB file path doesn't exist")
-        return 1
+        exit(1)
     create_kpf(epub_path)
 
 
-def create_kpf(epub_path: Path):
+def create_kpf(epub_path: Path) -> None:
     import shutil
     import tempfile
 
@@ -39,7 +40,7 @@ def create_kpf(epub_path: Path):
         kpf_path.rename(kpf_path.with_suffix(".kpf"))
 
 
-def create_kcb(kpf_dir: Path):
+def create_kcb(kpf_dir: Path) -> None:
     import json
     from importlib.metadata import version
 
@@ -57,7 +58,7 @@ def create_kcb(kpf_dir: Path):
         json.dump(data, f, indent=2, ensure_ascii=False)
 
 
-def create_manifest_file(resources_dir: Path):
+def create_manifest_file(resources_dir: Path) -> None:
     with (resources_dir / "ManifestFile").open("w") as f:
         f.write("""AmazonYJManifest
 digital_content_manifest::{

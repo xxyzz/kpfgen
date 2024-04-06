@@ -2,7 +2,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 
-def extract_epub(epub_path: Path, dest_path: Path):
+def extract_epub(epub_path: Path, dest_path: Path) -> None:
     import zipfile
 
     with zipfile.ZipFile(epub_path) as zf:
@@ -18,6 +18,7 @@ class EPUBMetadata:
     publisher: str = ""
     cover_path: Path | None = None
     spine_paths: list[Path] = field(default_factory=list)
+    toc: Path | None = None
 
 
 NAMESPACES = {
@@ -58,11 +59,14 @@ def get_epub_metadata(epub_dir: Path) -> EPUBMetadata:
             f'opf:manifest/opf:item[@id="{cover_id}"]', NAMESPACES
         ).get("href")
     get_epub_spine(opf_root, metadata, opf_path)
+    toc_element = opf_root.find('opf:manifest/opf:item[@properties="nav"]', NAMESPACES)
+    if toc_element is not None:
+        metadata.toc = opf_path.parent / toc_element.get("href")
 
     return metadata
 
 
-def get_epub_spine(opf_root, metadata: EPUBMetadata, opf_path: Path):
+def get_epub_spine(opf_root, metadata: EPUBMetadata, opf_path: Path) -> None:
     for spine_item in opf_root.iterfind("opf:spine/opf:itemref", NAMESPACES):
         manifest_item_id = spine_item.get("idref", "")
         manifest_item = opf_root.find(
