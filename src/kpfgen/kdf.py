@@ -320,12 +320,16 @@ class KDF:
     def process_spine_items(self) -> list[str]:
         first_structure_ids: dict[str, str] = {}
         section_ids = ["c0"]
+        all_structure_ids = {}
         for xml_path in self.epub_metadata.spine_paths:
             section_id, structure_ids = self.create_section(xml_path)
             section_ids.append(section_id)
             if len(structure_ids) > 0:
                 first_structure_ids[xml_path.name] = structure_ids[0][0]
+                all_structure_ids[section_id] = structure_ids
         self.create_book_navigation(first_structure_ids)
+        self.create_section_pid_count_map(all_structure_ids)
+        self.create_location_map(all_structure_ids)
         return section_ids
 
     def create_section(self, xml_path: Path) -> tuple[str, list[tuple[str, int]]]:
@@ -368,7 +372,7 @@ class KDF:
         )
         spm_ion = f"""{{
   section_name: kfx_id::"{section_id}",
-  contains: [[1, kfx_id::"{section_struct_id}"],{spm_contains}]
+  contains: [[1, kfx_id::"{section_struct_id}"], {spm_contains}]
 }}"""
         self.insert_blob_fragment(spm_id, spm_ion, "section_position_id_map")
         self.insert_fragment_property(spm_id, "element_type", "section_position_id_map")
@@ -562,6 +566,61 @@ class KDF:
                 )
                 entries.append(nav_unit_ion)
         return entries
+
+    def create_section_pid_count_map(
+        self, structure_ids: dict[str, list[tuple[str, int]]]
+    ) -> None:
+        section_lens = {}
+        for section_id, spm_list in structure_ids.items():
+            section_lens[section_id] = sum(s_len for _, s_len in spm_list)
+
+        map_ion = IonPyDict.from_value(
+            IonType.STRUCT,
+            {
+                "contains": [
+                    {
+                        "section_name": IonPyText.from_value(
+                            IonType.STRING, section_id, ("kfx_id",)
+                        ),
+                        "length": section_len,
+                    }
+                    for section_id, section_len in section_lens.items()
+                ]
+            },
+            ("yj.section_pid_count_map",),
+        )
+        self.insert_blob_fragment("yj.section_pid_count_map", map_ion)
+        self.insert_fragment_property(
+            "yj.section_pid_count_map", "element_type", "yj.section_pid_count_map"
+        )
+
+    def create_location_map(
+        self, structure_ids: dict[str, list[tuple[str, int]]]
+    ) -> None:
+        locations = []
+        for _, spm_list in structure_ids.items():
+            offset = 0
+            for structure_id, structure_len in spm_list:
+                locations.append((structure_id, offset))
+                offset += structure_len
+        map_ion = IonPyDict.from_value(
+            IonType.STRUCT,
+            {
+                "reading_order_name": IonPySymbol.from_value(IonType.SYMBOL, "default"),
+                "locations": [
+                    {
+                        "id": IonPyText.from_value(
+                            IonType.STRING, structure_id, ("kfx_id",)
+                        ),
+                        "offset": offset,
+                    }
+                    for structure_id, offset in locations
+                ],
+            },
+            ("location_map",),
+        )
+        self.insert_blob_fragment("location_map", map_ion)
+        self.insert_fragment_property("location_map", "element_type", "location_map")
 
 
 def remove_ion_table(binary: bytes) -> bytes:
