@@ -260,15 +260,18 @@ class KDF:
 
         with Image.open(image_path) as im:
             im_width, im_height = im.size
-            im_format = im.format or ""
-            im_format = im_format.lower()
-            if im_format == "jpeg":
-                im_format = "jpg"
+            if im.mode == "RGBA":  # convert to JPEG, can't display PNG
+                # only use `im.convert(RGB)` somehow creates all black image
+                new_im = Image.new("RGBA", im.size, (255, 255, 255))
+                new_im.paste(im, mask=im.split()[3])
+                new_im = new_im.convert("RGB")
+                image_path = image_path.with_suffix(".jpg")
+                new_im.save(image_path)
 
         res_id = self.create_fragment_id("e")
         res_loc_id = self.create_fragment_id("rsrc")
         res_text = f"""{{
-  format: {im_format},
+  format: jpg,
   location: "{res_loc_id}",
   resource_width: {im_width},
   resource_name: kfx_id::"{res_id}",
