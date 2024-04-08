@@ -282,11 +282,11 @@ class KDF:
             [
                 (res_id, "child", res_loc_id),
                 (res_id, "element_type", "external_resource"),
+                (res_loc_id, "element_type", "bcRawMedia"),
             ]
         )
         shutil.copy(image_path, self.res_dir / res_loc_id)
-        self.insert_fragment(res_loc_id, "path", f"res/{res_loc_id}")
-        self.insert_fragment_property(res_loc_id, "element_type", "bcRawMedia")
+        self.insert_fragment(res_loc_id, "path", f"{self.res_dir.name}/{res_loc_id}")
         return res_id
 
     def insert_fragment(
@@ -405,8 +405,10 @@ class KDF:
     ) -> str | None:
         if not is_tag_displayed(tag):
             return None
-        if tag.tag_name in ["figure", "img"]:
-            return None
+        if tag.tag_name == "figure":
+            return self.create_container_structure(tag, parent_id, spm_list)
+        elif tag.tag_name == "img":
+            return self.process_img_tag(tag, parent_id)
         elif is_block_tag(tag):
             if not contain_block_tag(tag):
                 if len(tag.text) > 0:
@@ -624,6 +626,35 @@ class KDF:
         )
         self.insert_blob_fragment("location_map", map_ion)
         self.insert_fragment_property("location_map", "element_type", "location_map")
+
+    def process_img_tag(self, img_tag: WebElement, parent_id: str) -> str | None:
+        structure_id = self.create_fragment_id("i")
+        # style_id = self.create_fragment_id("s")
+        img_src = img_tag.get_attribute("src")
+        if img_src is None:
+            return None
+        resource_name = self.insert_image_resource(
+            Path(img_src.removeprefix("file://"))
+        )
+        img_ion_data = {
+            "kfx_id": IonPyText.from_value(IonType.STRING, structure_id, ("kfx_id",)),
+            # "style": IonPyText.from_value(IonType.STRING, style_id, ("kfx_id",)),
+            "type": IonPySymbol.from_value(IonType.SYMBOL, "image"),
+            "resource_name": resource_name,
+        }
+        alt_text = img_tag.get_attribute("alt")
+        if alt_text is not None:
+            img_ion_data["alt_text"] = alt_text
+        img_ion = IonPyDict.from_value(IonType.STRUCT, img_ion_data, ("structure",))
+        self.insert_blob_fragment(structure_id, img_ion)
+        self.insert_fragment_properties(
+            [
+                (structure_id, "element_type", "structure"),
+                (parent_id, "child", structure_id),
+                (structure_id, "child", resource_name),
+            ]
+        )
+        return structure_id
 
 
 def remove_ion_table(binary: bytes) -> bytes:

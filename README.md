@@ -5,6 +5,9 @@ Convert EPUB to KPF.
 ## Dependencies
 
 - [geckodriver](https://github.com/mozilla/geckodriver)
+- [Firefox](https://mozilla.org/firefox)
+
+Python dependencies are in the `pyproject.toml` file.
 
 ## Install from source
 
